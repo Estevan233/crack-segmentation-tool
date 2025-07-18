@@ -350,7 +350,7 @@ def runReedsSheppGF(sides, dims, seeds, tips, metric):
     print('Done.')
     return geos
 
-def fast_marching(os_cost,start_point,end_point,g11=1,g22=100,g33=100):
+def fast_marching(os_cost,start_point,end_points,g11=1,g22=100,g33=100):
     NxCost = os_cost.shape[1]
     NyCost = os_cost.shape[2]
     NoCost = os_cost.shape[0]
@@ -375,13 +375,16 @@ def fast_marching(os_cost,start_point,end_point,g11=1,g22=100,g33=100):
     sides = np.array([b,c,a])
 
     seeds = np.array([*start_point[::-1],np.pi/2])
-    tips = np.array([*end_point[::-1],np.pi/2])
+    tips = np.array([[*end_point[::-1],np.pi/2] for end_point in end_points])
 
     metricLIFinclCostOld = np.reshape(metricLIFinclCostOld,(3,3,dims[0],dims[1],dims[2]))
 
-    geos1 = runReedsSheppGF(sides, [dims[1],dims[2],dims[0]], [seeds], [tips], metricLIFinclCostOld1)
+    geos1 = runReedsSheppGF(sides, [dims[1],dims[2],dims[0]], [seeds], tips, metricLIFinclCostOld1)
 
-    return [geos1[0][:,1],geos1[0][:,0]]
+    paths = [[g[:,1], g[:,0]] for g in geos1]
+    costs = [np.sum(os_cost[g[:, 2].astype(int), g[:, 0].astype(int), g[:, 1].astype(int)]) for g in geos1]
+
+    return paths, costs
 
 def fast_marching_2d(cost,start_point,end_point,l = 1, p = 6):
     mu = 0

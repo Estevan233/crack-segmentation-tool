@@ -42,7 +42,7 @@ class CrackToolsApplication(Ui_MainWindow):
         self.clear_segmentation_button.clicked.connect(self.clear_segmentation) 
         self.files_list.itemSelectionChanged.connect(self.name_selected)
 
-        self.select_points_button.clicked.connect(self.select_end_points)
+        self.autodetect_cracks_button.clicked.connect(self.autodetect_cracks)
         self.update_image_crop_button.clicked.connect(self.update_image_crop)
         self.wavelet_button.clicked.connect(self.check_wavelet)
         self.middle_point_button.clicked.connect(self.select_middle_point)
@@ -278,22 +278,12 @@ class CrackToolsApplication(Ui_MainWindow):
             error()
 ################################################################################################################
 
-    def select_end_points(self):
-        try :
-            self.image_size = self.select_image_size.value()
-            ptss = ct.tools.Draw().points(self.image[:,:,::-1],self.image_size,move_x = 0,move_y = 0)
-            self.end_points = ptss
-            self.points_pairs_list = [ptss[b*2:b*2+2] for b in range(len(ptss))]
-            if len(self.points_pairs_list) == 2:
-                self.update_image_crop_button.setStyleSheet("background-color : lightblue")
-                self.middle_point_button.setStyleSheet("background-color : lightblue")
-            else:
-                self.update_image_crop_button.setStyleSheet("background-color : red")
-                self.middle_point_button.setStyleSheet("background-color : red")
-        except :
-            error()
-            self.update_image_crop_button.setStyleSheet("background-color : red")
-            self.middle_point_button.setStyleSheet("background-color : red")
+
+    def autodetect_cracks(self):
+        self.update_image_crop()
+        self.update_os()
+        self.update_cost()
+        self.midline_tracking()
 
     def update_image_crop(self):
         try :
@@ -301,9 +291,28 @@ class CrackToolsApplication(Ui_MainWindow):
             x_margin = self.x_margin_box.value()
             downsample_factor = self.downsample_factor_box.value()
             color_channel = [0 if self.color_chenel_box.currentText()=='R' else 1 if self.color_chenel_box.currentText()=='B' else 2]
-            if self.end_points == []:
-                self.select_end_points()
-            self.pts = self.end_points
+
+            P_size = self.P_size_box.value()
+            ke = 1.0 # You might want to make this a GUI element
+
+            # Create a dummy cells structure to run init_points
+            size1 = int(np.ceil(self.original_image.shape[0] / P_size))
+            size2 = int(np.ceil(self.original_image.shape[1] / P_size))
+            cells = ct.MPS.MPSStructure(size1,size2)
+
+            image_gray = self.original_image[:,:,color_channel].squeeze()
+
+            cells = ct.MPS.init_points(cells, image_gray, P_size, ke)
+
+            start_point, end_points = ct.MPS.find_start_end_points(cells.nodes, num_endpoints=3)
+
+            if not start_point or not end_points:
+                error()
+                return
+
+            self.pts = [start_point] + end_points
+            self.end_points = self.pts
+
             black_crack = [0 if self.crack_color_box.currentText() =='Bright crack' else 1 ][0]
             if black_crack==1:
                 func = np.min
@@ -311,7 +320,6 @@ class CrackToolsApplication(Ui_MainWindow):
                 func = np.max
             self.image_crop,self.pts_crop = ct.tools.image_crop(self.original_image,self.pts[0],self.pts[1],self.pts,y_margin,x_margin)
 
-            P_size = self.P_size_box.value()
             self.image_crop_down = skimage.measure.block_reduce(self.image_crop, block_size=(downsample_factor, downsample_factor, 1),
                                                     func=func, cval=0, func_kwargs=None)
             self.pts_crop_down = [x / downsample_factor for x in self.pts_crop]
@@ -582,16 +590,26 @@ class CrackToolsApplication(Ui_MainWindow):
             downsample_factor = self.downsample_factor_box.value()
 
 
-            track_crop_down = ct.tracking.fast_marching(self.costFunction,self.pts_crop_down[0],self.pts_crop_down[1],g11=g11,g22=g22,g33=g33)
-            track_crop_down[0] = track_crop_down[0]-0.5
-            track_crop_down[1] = track_crop_down[1]-0.5
-            track_crop = track_crop_down.copy()
-            track_crop[0] = track_crop_down[0]*downsample_factor
-            track_crop[1] = track_crop_down[1]*downsample_factor
-            self.track_crop = track_crop
-            track = ct.tools.track_crop_to_full(track_crop,self.pts[0],self.pts[1],y_margin,x_margin)
-            self.track = track
-            pts = np.array(track_crop).transpose(1,0).reshape((-1,1,2)).astype(np.int32)
+            tips = self.pts_crop_down[1:]
+            track_crop_down, costs = ct.tracking.fast_marching(self.costFunction,self.pts_crop_down[0],tips,g11=g11,g22=g22,g33=g33)
+
+            self.tracks = []
+            self.tracks_crop = []
+
+            for track_down in track_crop_down:
+                track_down[0] = track_down[0]-0.5
+                track_down[1] = track_down[1]-0.5
+                track_crop = track_down.copy()
+                track_crop[0] = track_down[0]*downsample_factor
+                track_crop[1] = track_down[1]*downsample_factor
+                self.tracks_crop.append(track_crop)
+                track = ct.tools.track_crop_to_full(track_crop,self.pts[0],self.pts[1],y_margin,x_margin)
+                self.tracks.append(track)
+
+            self.track = self.tracks[0] # for visualization purposes, only show the first track
+            self.track_crop = self.tracks_crop[0]
+
+            pts = np.array(self.track_crop).transpose(1,0).reshape((-1,1,2)).astype(np.int32)
             im = self.image_crop.astype(np.uint8)
             im = cv2.polylines(im, [pts], False, color, w)
 
