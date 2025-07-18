@@ -280,9 +280,17 @@ class CrackToolsApplication(Ui_MainWindow):
 
 
     def autodetect_cracks(self):
-        self.update_image_crop()
         self.update_os()
-        self.update_cost()
+
+        cost_function = self.costFunction
+        start_point, end_points = ct.tracking.find_start_end_points(cost_function)
+
+        if start_point is None:
+            error()
+            return
+
+        self.pts_crop_down = [start_point] + end_points
+
         self.midline_tracking()
 
     def update_image_crop(self):
@@ -292,36 +300,22 @@ class CrackToolsApplication(Ui_MainWindow):
             downsample_factor = self.downsample_factor_box.value()
             color_channel = [0 if self.color_chenel_box.currentText()=='R' else 1 if self.color_chenel_box.currentText()=='B' else 2]
 
-            P_size = self.P_size_box.value()
-            ke = 1.0 # You might want to make this a GUI element
-
-            # Create a dummy cells structure to run init_points
-            size1 = int(np.ceil(self.original_image.shape[0] / P_size))
-            size2 = int(np.ceil(self.original_image.shape[1] / P_size))
-            cells = ct.MPS.MPSStructure(size1,size2)
-
-            image_gray = self.original_image[:,:,color_channel].squeeze()
-
-            cells = ct.MPS.init_points(cells, image_gray, P_size, ke)
-
-            start_point, end_points = ct.MPS.find_start_end_points(cells.nodes, num_endpoints=3)
-
-            if not start_point or not end_points:
-                error()
-                return
-
-            self.pts = [start_point] + end_points
-            self.end_points = self.pts
-
             black_crack = [0 if self.crack_color_box.currentText() =='Bright crack' else 1 ][0]
             if black_crack==1:
                 func = np.min
             elif  black_crack==0:
                 func = np.max
-            self.image_crop,self.pts_crop = ct.tools.image_crop(self.original_image,self.pts[0],self.pts[1],self.pts,y_margin,x_margin)
+
+            # Since we are not selecting points anymore, we process the whole image
+            self.image_crop = self.original_image
+            self.pts_crop = [[0,0], [self.original_image.shape[1], self.original_image.shape[0]]]
 
             self.image_crop_down = skimage.measure.block_reduce(self.image_crop, block_size=(downsample_factor, downsample_factor, 1),
                                                     func=func, cval=0, func_kwargs=None)
+
+            if self.NLM_checkbox.isChecked():
+                self.image_crop_down = cv2.fastNlMeansDenoisingColored(self.image_crop_down, None, self.NLM_strength_box.value(), 10, 7, 21)
+
             self.pts_crop_down = [x / downsample_factor for x in self.pts_crop]
             self.image_down = skimage.measure.block_reduce(self.original_image, block_size=(downsample_factor, downsample_factor, 1),
                                                     func=func, cval=0, func_kwargs=None)
@@ -339,10 +333,6 @@ class CrackToolsApplication(Ui_MainWindow):
             self.x_size_show.display(self.image_crop_down.shape[1])
             self.y_size_show.display(self.image_crop_down.shape[0])
             self.update_os_button.setStyleSheet("background-color : lightblue")
-
-            if self.NLM_checkbox.isChecked():
-                self.image_crop_down = cv2.fastNlMeansDenoisingColored(self.image_crop_down, None, self.NLM_strength_box.value(), 10, 7, 21)
-
         except :
             error()
             self.update_os_button.setStyleSheet("background-color : red")
@@ -590,8 +580,9 @@ class CrackToolsApplication(Ui_MainWindow):
             downsample_factor = self.downsample_factor_box.value()
 
 
+            start_point = self.pts_crop_down[0]
             tips = self.pts_crop_down[1:]
-            track_crop_down, costs = ct.tracking.fast_marching(self.costFunction,self.pts_crop_down[0],tips,g11=g11,g22=g22,g33=g33)
+            track_crop_down, costs, _ = ct.tracking.fast_marching(self.costFunction,start_point,tips,g11=g11,g22=g22,g33=g33)
 
             self.tracks = []
             self.tracks_crop = []
@@ -599,6 +590,7 @@ class CrackToolsApplication(Ui_MainWindow):
             for track_down in track_crop_down:
                 track_down[0] = track_down[0]-0.5
                 track_down[1] = track_down[1]-0.5
+            for track_down in track_crop_down:
                 track_crop = track_down.copy()
                 track_crop[0] = track_down[0]*downsample_factor
                 track_crop[1] = track_down[1]*downsample_factor
@@ -609,7 +601,12 @@ class CrackToolsApplication(Ui_MainWindow):
             self.track = self.tracks[0] # for visualization purposes, only show the first track
             self.track_crop = self.tracks_crop[0]
 
-            pts = np.array(self.track_crop).transpose(1,0).reshape((-1,1,2)).astype(np.int32)
+            im_display = self.image_crop.astype(np.uint8)
+            for track_crop_item in self.tracks_crop:
+                pts = np.array(track_crop_item).transpose(1,0).reshape((-1,1,2)).astype(np.int32)
+                im_display = cv2.polylines(im_display, [pts], False, color, w)
+
+            im = im_display
             im = self.image_crop.astype(np.uint8)
             im = cv2.polylines(im, [pts], False, color, w)
 

@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.ndimage
-import scipy.spatial
 # import itertools
 from copy import deepcopy
 from agd.Metrics import Riemann 
@@ -236,8 +235,9 @@ class Node():
         self.i = i
         self.j = j
         
-        self.min_point_val = None
-        self.min_point_pos_image = None
+        self.min_point_val = image_gray[self.x1:self.x2,self.y1:self.y2].min()
+        self.min_point_pos_cell = np.argwhere(image_gray[self.x1:self.x2,self.y1:self.y2] == self.min_point_val)[0]
+        self.min_point_pos_image = self.min_point_pos_cell + np.array([self.x1,self.y1])
     
         self.active = True
 
@@ -246,10 +246,7 @@ class Node():
             self.active = False
         
         
-def Dijkstars(seed, tips, cost, early_exit=True, visited_nodes=None):
-
-    if visited_nodes is None:
-        visited_nodes = set()
+def Dijkstars(seed,tip,cost):
 
     b = np.array([0,cost.shape[0]])
     c = np.array([0,cost.shape[1]])
@@ -276,132 +273,70 @@ def Dijkstars(seed, tips, cost, early_exit=True, visited_nodes=None):
     metric1 = (0.0001+cost*l)**p*df
     
     metric = Riemann(metric1)
-
     hfmIn = Eikonal.dictIn({
         'model' : 'Riemann2',
         'seeds' : np.expand_dims(seed,axis = 0),
         'arrayOrdering' : 'RowMajor',
-        'tips' : tips,
-        'metric' : metric,
-        'early_exit': early_exit,
-        'visited_nodes': visited_nodes
-        })
+        'tips' : np.expand_dims(tip,axis = 0),
+        'metric' : metric})
     hfmIn['order']=2
     hfmIn.SetRect(sides = sides, dims = dims)
     hfmOut = hfmIn.Run()
     geos1 = [g.T for g in hfmOut['geodesics']]
-
-    paths = [np.array(g, dtype=int) for g in geos1]
-
-    for path in paths:
-        for point in path:
-            visited_nodes.add(tuple(point))
-
-    vals = [np.sum(cost[np.unique(p, axis=0)[:,0], np.unique(p, axis=0)[:,1]]) for p in paths]
-
-    return paths, vals, visited_nodes
+    path = np.array(geos1[0],dtype = int)
+    path1 = np.unique(path,axis = 0)
+    val = np.sum(cost[path1[:,0],path1[:,1]])
+    return geos1[0],val
 
 def init_points(cells, image_gray, P, ke):
     Te = np.mean(image_gray) - ke*np.std(image_gray)
-    for i in range(0, image_gray.shape[0], P):
-        for j in range(0, image_gray.shape[1], P):
-
-            patch = image_gray[i:i+P, j:j+P]
-            if patch.size == 0:
-                continue
-
-            min_val = np.min(patch)
-
-            if min_val > Te:
-                continue
-
-            min_pos_local = np.unravel_index(np.argmin(patch), patch.shape)
-            min_pos_global = (i + min_pos_local[0], j + min_pos_local[1])
-
-            ii = i // P
-            jj = j // P
-
-            if ii < cells.nodes.shape[0] and jj < cells.nodes.shape[1]:
-                node = Node(image_gray, i, i+P, j, j+P, ii, jj)
-                node.min_point_val = min_val
-                node.min_point_pos_image = min_pos_global
-                cells.nodes[ii, jj] = node
+    for i in range(0, int(np.ceil(image_gray.shape[0])), P):
+        ii = int(np.ceil(i/P))
+        for j in range(0, int(np.ceil(image_gray.shape[1]) ), P):
+            jj = int(np.ceil(j/P))
+            cell = Node(image_gray, i, i+P, j, j+P,ii,jj)
+            cell.Min_value_threshold(Te)
+            cells.nodes[ii,jj] = cell
 
     cells.update()
     return cells
 
-def find_start_end_points(nodes, num_endpoints=3):
-
-    active_nodes = [node for node in nodes.flatten() if node and node.active]
-    if not active_nodes:
-        return None, []
-
-    node_positions = np.array([node.min_point_pos_image for node in active_nodes])
-
-    if len(node_positions) < 2:
-        return None, []
-
-    dist_matrix = scipy.spatial.distance.cdist(node_positions, node_positions)
-
-    mean_dists = np.mean(dist_matrix, axis=1)
-
-    start_node_idx = np.argmax(mean_dists)
-
-    end_node_indices = np.argsort(dist_matrix[start_node_idx])[-num_endpoints:]
-
-    start_point = active_nodes[start_node_idx].min_point_pos_image
-    end_points = [active_nodes[i].min_point_pos_image for i in end_node_indices]
-
-    return start_point, end_points
-
 def calc_paths(cells,image_gray):
     k = 0
-    start_point, end_points = find_start_end_points(cells.nodes)
+    paths = []
+    for i in range(cells.connections.shape[0]):
+        for j in range(cells.connections.shape[1]):
+            if cells.nodes[i,j].active:
+                for n in range(cells.connections.shape[2]):
+                    if cells.connections[i,j,n].node1 == []:
+                        continue
 
-    if not start_point or not end_points:
-        return cells
+                    center_node = cells.connections[i,j,n].node1
+                    side_node = cells.connections[i,j,n].node2
+                    if side_node.active == False:
+                        continue
+                    x1 = np.min([side_node.x1,center_node.x1])
+                    x2 = np.max([side_node.x2,center_node.x2])
+                    y1 = np.min([side_node.y1,center_node.y1])
+                    y2 = np.max([side_node.y2,center_node.y2])
 
-    x1 = np.min([node.x1 for node in cells.nodes.flatten() if node and node.active])
-    x2 = np.max([node.x2 for node in cells.nodes.flatten() if node and node.active])
-    y1 = np.min([node.y1 for node in cells.nodes.flatten() if node and node.active])
-    y2 = np.max([node.y2 for node in cells.nodes.flatten() if node and node.active])
+                    seed = center_node.min_point_pos_image - np.array([x1,y1])
+                    tip = side_node.min_point_pos_image - np.array([x1,y1])
 
-    cost_function = image_gray[x1:x2, y1:y2]
+                    cost_function = image_gray[x1:x2,y1:y2]
+                    if np.sum(np.array(cost_function.shape) == 1) >=1:
+                        continue
+                    path,cost = Dijkstars(seed,tip,cost_function)
+                    path[:,0] = path[:,0] + x1
+                    path[:,1] = path[:,1] + y1
+                    l = np.unique(np.array(path).astype(int),axis = 0).shape[0]
+                    c = cost/l
+                    cells.connections[i,j,n].update_connection(path,c,l)
+                    n_1 = cells.directions[n]
+                    n_2 = cells.reversed_directions.index(n_1)
+                    ii = side_node.i
+                    jj = side_node.j
+                    cells.connections[ii,jj,n_2] = cells.connections[i,j,n]
 
-    seed = start_point - np.array([x1, y1])
-    tips = [ep - np.array([x1, y1]) for ep in end_points]
-
-    visited_nodes = set()
-    paths, costs, visited_nodes = Dijkstars(seed, tips, cost_function, early_exit=False, visited_nodes=visited_nodes)
-
-    for path, cost in zip(paths, costs):
-        path[:, 0] = path[:, 0] + x1
-        path[:, 1] = path[:, 1] + y1
-        l = np.unique(np.array(path).astype(int), axis=0).shape[0]
-        if l == 0:
-            continue
-        c = cost / l
-
-        # This part needs to be re-thought. We are no longer iterating through connections.
-        # For now, I will just store the paths and costs.
-        # A more sophisticated approach would be to map the paths back to the grid and update the connections.
-
-        # For now, let's just create a dummy connection object and store it.
-        # This is a placeholder for a more complete implementation.
-
-        # Find the nodes corresponding to the start and end of the path
-        start_node = None
-        end_node = None
-        for node in cells.nodes.flatten():
-            if node and np.array_equal(node.min_point_pos_image, path[0]):
-                start_node = node
-            if node and np.array_equal(node.min_point_pos_image, path[-1]):
-                end_node = node
-
-        if start_node and end_node:
-            connection = Connection(start_node, end_node)
-            connection.update_connection(path, c, l)
-            # We would need to find the correct connection in the cells.connections array to update.
-            # This is non-trivial.
-
+                    k = k+1
     return cells

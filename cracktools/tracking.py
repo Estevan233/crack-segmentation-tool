@@ -334,14 +334,16 @@ def IncludeCost(cost,metric):
     metric = metric*cost
     return metric
 
-def runReedsSheppGF(sides, dims, seeds, tips, metric):
+def runReedsSheppGF(sides, dims, seeds, tips, metric, visited_nodes=None):
     metric = Riemann(xp.array(metric))
     hfmIn = Eikonal.dictIn({
         'model' : 'Riemann3_Periodic',
         'seeds' : seeds,
         'arrayOrdering' : 'RowMajor',
         'tips' : tips,
-        'metric' : metric})
+        'metric' : metric,
+        'visited_nodes' : visited_nodes
+        })
     hfmIn.SetRect(sides = sides, dims = dims)
 #     if hfmIn.mode=='gpu': 
 #     hfmIn.update({'model':'Riemann3','periodic':(True,False,False)})
@@ -350,7 +352,10 @@ def runReedsSheppGF(sides, dims, seeds, tips, metric):
     print('Done.')
     return geos
 
-def fast_marching(os_cost,start_point,end_points,g11=1,g22=100,g33=100):
+def fast_marching(os_cost,start_point,end_points,g11=1,g22=100,g33=100, visited_nodes=None):
+    if visited_nodes is None:
+        visited_nodes = set()
+
     NxCost = os_cost.shape[1]
     NyCost = os_cost.shape[2]
     NoCost = os_cost.shape[0]
@@ -379,12 +384,37 @@ def fast_marching(os_cost,start_point,end_points,g11=1,g22=100,g33=100):
 
     metricLIFinclCostOld = np.reshape(metricLIFinclCostOld,(3,3,dims[0],dims[1],dims[2]))
 
-    geos1 = runReedsSheppGF(sides, [dims[1],dims[2],dims[0]], [seeds], tips, metricLIFinclCostOld1)
+    geos1 = runReedsSheppGF(sides, [dims[1],dims[2],dims[0]], [seeds], tips, metricLIFinclCostOld1, visited_nodes=visited_nodes)
 
     paths = [[g[:,1], g[:,0]] for g in geos1]
     costs = [np.sum(os_cost[g[:, 2].astype(int), g[:, 0].astype(int), g[:, 1].astype(int)]) for g in geos1]
 
-    return paths, costs
+    for path in paths:
+        for point in path:
+            visited_nodes.add(tuple(point))
+
+    return paths, costs, visited_nodes
+
+def find_start_end_points(cost, num_endpoints=3, threshold_quantile=0.9):
+
+    threshold = np.quantile(cost, threshold_quantile)
+    high_cost_points = np.argwhere(cost > threshold)
+
+    if len(high_cost_points) < 2:
+        return None, []
+
+    dist_matrix = scipy.spatial.distance.cdist(high_cost_points, high_cost_points)
+
+    mean_dists = np.mean(dist_matrix, axis=1)
+
+    start_node_idx = np.argmax(mean_dists)
+
+    end_node_indices = np.argsort(dist_matrix[start_node_idx])[-num_endpoints:]
+
+    start_point = high_cost_points[start_node_idx]
+    end_points = [high_cost_points[i] for i in end_node_indices]
+
+    return start_point, end_points
 
 def fast_marching_2d(cost,start_point,end_point,l = 1, p = 6):
     mu = 0
