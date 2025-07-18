@@ -310,6 +310,8 @@ class CrackToolsApplication(Ui_MainWindow):
             elif  black_crack==0:
                 func = np.max
             self.image_crop,self.pts_crop = ct.tools.image_crop(self.original_image,self.pts[0],self.pts[1],self.pts,y_margin,x_margin)
+
+            P_size = self.P_size_box.value()
             self.image_crop_down = skimage.measure.block_reduce(self.image_crop, block_size=(downsample_factor, downsample_factor, 1),
                                                     func=func, cval=0, func_kwargs=None)
             self.pts_crop_down = [x / downsample_factor for x in self.pts_crop]
@@ -329,6 +331,10 @@ class CrackToolsApplication(Ui_MainWindow):
             self.x_size_show.display(self.image_crop_down.shape[1])
             self.y_size_show.display(self.image_crop_down.shape[0])
             self.update_os_button.setStyleSheet("background-color : lightblue")
+
+            if self.NLM_checkbox.isChecked():
+                self.image_crop_down = cv2.fastNlMeansDenoisingColored(self.image_crop_down, None, self.NLM_strength_box.value(), 10, 7, 21)
+
         except :
             error()
             self.update_os_button.setStyleSheet("background-color : red")

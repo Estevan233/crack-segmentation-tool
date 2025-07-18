@@ -235,9 +235,8 @@ class Node():
         self.i = i
         self.j = j
         
-        self.min_point_val = image_gray[self.x1:self.x2,self.y1:self.y2].min()
-        self.min_point_pos_cell = np.argwhere(image_gray[self.x1:self.x2,self.y1:self.y2] == self.min_point_val)[0]
-        self.min_point_pos_image = self.min_point_pos_cell + np.array([self.x1,self.y1])
+        self.min_point_val = None
+        self.min_point_pos_image = None
     
         self.active = True
 
@@ -246,7 +245,7 @@ class Node():
             self.active = False
         
         
-def Dijkstars(seed,tip,cost):
+def Dijkstars(seed, tip, cost, early_exit=True):
 
     b = np.array([0,cost.shape[0]])
     c = np.array([0,cost.shape[1]])
@@ -273,12 +272,15 @@ def Dijkstars(seed,tip,cost):
     metric1 = (0.0001+cost*l)**p*df
     
     metric = Riemann(metric1)
+
     hfmIn = Eikonal.dictIn({
         'model' : 'Riemann2',
         'seeds' : np.expand_dims(seed,axis = 0),
         'arrayOrdering' : 'RowMajor',
         'tips' : np.expand_dims(tip,axis = 0),
-        'metric' : metric})
+        'metric' : metric,
+        'early_exit': early_exit
+        })
     hfmIn['order']=2
     hfmIn.SetRect(sides = sides, dims = dims)
     hfmOut = hfmIn.Run()
@@ -286,17 +288,34 @@ def Dijkstars(seed,tip,cost):
     path = np.array(geos1[0],dtype = int)
     path1 = np.unique(path,axis = 0)
     val = np.sum(cost[path1[:,0],path1[:,1]])
+
     return geos1[0],val
 
 def init_points(cells, image_gray, P, ke):
     Te = np.mean(image_gray) - ke*np.std(image_gray)
-    for i in range(0, int(np.ceil(image_gray.shape[0])), P):
-        ii = int(np.ceil(i/P))
-        for j in range(0, int(np.ceil(image_gray.shape[1]) ), P):
-            jj = int(np.ceil(j/P))
-            cell = Node(image_gray, i, i+P, j, j+P,ii,jj)
-            cell.Min_value_threshold(Te)
-            cells.nodes[ii,jj] = cell
+    for i in range(0, image_gray.shape[0], P):
+        for j in range(0, image_gray.shape[1], P):
+
+            patch = image_gray[i:i+P, j:j+P]
+            if patch.size == 0:
+                continue
+
+            min_val = np.min(patch)
+
+            if min_val > Te:
+                continue
+
+            min_pos_local = np.unravel_index(np.argmin(patch), patch.shape)
+            min_pos_global = (i + min_pos_local[0], j + min_pos_local[1])
+
+            ii = i // P
+            jj = j // P
+
+            if ii < cells.nodes.shape[0] and jj < cells.nodes.shape[1]:
+                node = Node(image_gray, i, i+P, j, j+P, ii, jj)
+                node.min_point_val = min_val
+                node.min_point_pos_image = min_pos_global
+                cells.nodes[ii, jj] = node
 
     cells.update()
     return cells
@@ -326,7 +345,7 @@ def calc_paths(cells,image_gray):
                     cost_function = image_gray[x1:x2,y1:y2]
                     if np.sum(np.array(cost_function.shape) == 1) >=1:
                         continue
-                    path,cost = Dijkstars(seed,tip,cost_function)
+                    path,cost = Dijkstars(seed,tip,cost_function,early_exit=True)
                     path[:,0] = path[:,0] + x1
                     path[:,1] = path[:,1] + y1
                     l = np.unique(np.array(path).astype(int),axis = 0).shape[0]
